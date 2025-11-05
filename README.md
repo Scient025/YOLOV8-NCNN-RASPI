@@ -86,3 +86,7 @@ A more than special thanks to [***FeiGeChuanShu***](https://github.com/FeiGeChua
 [![paypal](https://qengineering.eu/images/TipJarSmall4.png)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=CPZTM5BB3FCYL) 
 
 
+
+
+
+Extension onto this for dual raspi camera setup 

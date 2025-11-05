@@ -1,57 +1,53 @@
-// Tencent is pleased to support the open source community by making ncnn available.
-//
-// Copyright (C) 2020 THL A29 Limited, a Tencent company. All rights reserved.
-//
-// Licensed under the BSD 3-Clause License (the "License"); you may not use this file except
-// in compliance with the License. You may obtain a copy of the License at
-//
-// https://opensource.org/licenses/BSD-3-Clause
-//
-// Unless required by applicable law or agreed to in writing, software distributed
-// under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-// CONDITIONS OF ANY KIND, either express or implied. See the License for the
-// specific language governing permissions and limitations under the License.
-
-//modified 1-14-2023 Q-engineering
-
 #include "yoloV8.h"
-
-#include <opencv2/core/core.hpp>
-#include <opencv2/highgui/highgui.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/opencv.hpp>
 #include <iostream>
-#include <stdio.h>
-#include <vector>
-
-YoloV8 yolov8;
-int target_size = 640; //416; //320;  must be divisible by 32.
+#include <chrono>
 
 int main(int argc, char** argv)
 {
-    const char* imagepath = argv[1];
+    YoloV8 yolo;
+    yolo.load(640);  // target input size
 
-    if (argc != 2)
-    {
-        fprintf(stderr, "Usage: %s [imagepath]\n", argv[0]);
+    std::string cam_path = (argc > 1) ? argv[1] : "/dev/video0";
+    cv::VideoCapture cap(cam_path, cv::CAP_V4L2);
+    cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
+    cap.set(cv::CAP_PROP_FPS, 30);
+
+    if (!cap.isOpened()) {
+        std::cerr << "❌ Cannot open camera: " << cam_path << std::endl;
         return -1;
     }
 
-    cv::Mat m = cv::imread(imagepath, 1);
-    if (m.empty())
+    std::cout << "📷 Camera opened: " << cam_path << std::endl;
+    cv::Mat frame;
+    while (true)
     {
-        fprintf(stderr, "cv::imread %s failed\n", imagepath);
-        return -1;
+        cap >> frame;
+        if (frame.empty()) continue;
+
+        auto start = std::chrono::steady_clock::now();
+
+        std::vector<Object> objects;
+        yolo.detect(frame, objects, 0.35f, 0.45f);  // conf, nms
+
+        // optional: only show humans
+        std::vector<Object> persons;
+        for (auto& obj : objects)
+            if (obj.label == 0)
+                persons.push_back(obj);
+
+        yolo.draw(frame, persons);
+
+        auto end = std::chrono::steady_clock::now();
+        double fps = 1000.0 / std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+        cv::putText(frame, cv::format("FPS: %.1f", fps), cv::Point(20, 40),
+                    cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(255, 0, 0), 2);
+
+        cv::imshow("YOLOv8 NCNN Camera", frame);
+        if (cv::waitKey(1) == 27) break;  // ESC
     }
-
-    yolov8.load(target_size);       //load model (once) see yoloyV8.cpp line 246
-
-    std::vector<Object> objects;
-    yolov8.detect(m, objects);      //recognize the objects
-    yolov8.draw(m, objects);        //show the outcome
-
-    cv::imshow("RPi4 - 1.95 GHz - 2 GB ram",m);
-//    cv::imwrite("out.jpg",m);
-    cv::waitKey(0);
 
     return 0;
 }
