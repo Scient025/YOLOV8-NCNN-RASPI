@@ -1,17 +1,11 @@
 // yolov8_dualcam_headless.cpp
-// Dual-camera headless YOLOv8 human detector with JSON logging only.
-// Compile:
-// g++ yolov8.cpp yolov8_dualcam_headless.cpp -o YoloV8DualHeadless \
-//     `pkg-config --cflags --libs opencv4` \
-//     -I /home/pi/ncnn/build/install/include/ncnn \
-//     -L /home/pi/ncnn/build/install/lib -lncnn -fopenmp -lpthread -O3 -std=c++17
+// Dual-camera headless YOLOv8 human detector
+// Continuous per-camera JSON logs (no image saving, no GUI)
 
 #include "yoloV8.h"
 #include <opencv2/opencv.hpp>
 #include <chrono>
 #include <thread>
-#include <mutex>
-#include <deque>
 #include <atomic>
 #include <filesystem>
 #include <fstream>
@@ -25,19 +19,6 @@ struct PersonInfo {
     cv::Rect bbox;
     float conf;
 };
-struct FrameResult {
-    std::string cam_name;
-    int human_count;
-    std::vector<PersonInfo> persons;
-    long long ts_ms;
-    double capture_ms;
-    double infer_ms;
-    double total_ms;
-};
-
-std::mutex q_mutex;
-std::deque<FrameResult> results_q;
-std::atomic<bool> stop_all(false);
 
 long long now_ms() {
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
@@ -51,59 +32,47 @@ std::string ts_to_str(long long ms) {
     oss << "." << std::setw(3) << std::setfill('0') << rem;
     return oss.str();
 }
-std::string make_json(const FrameResult& r) {
+
+std::string make_json(const std::string& cam_name, int human_count,
+                      const std::vector<PersonInfo>& persons,
+                      double capture_ms, double infer_ms, double total_ms, long long ts_ms) {
     std::ostringstream j;
     j << "{";
-    j << "\"timestamp_ms\":" << r.ts_ms << ",";
-    j << "\"timestamp\":\"" << ts_to_str(r.ts_ms) << "\",";
-    j << "\"camera\":\"" << r.cam_name << "\",";
-    j << "\"human_count\":" << r.human_count << ",";
-    j << "\"capture_ms\":" << std::fixed << std::setprecision(2) << r.capture_ms << ",";
-    j << "\"infer_ms\":" << r.infer_ms << ",";
-    j << "\"total_ms\":" << r.total_ms << ",";
+    j << "\"timestamp_ms\":" << ts_ms << ",";
+    j << "\"timestamp\":\"" << ts_to_str(ts_ms) << "\",";
+    j << "\"camera\":\"" << cam_name << "\",";
+    j << "\"human_count\":" << human_count << ",";
+    j << "\"capture_ms\":" << std::fixed << std::setprecision(2) << capture_ms << ",";
+    j << "\"infer_ms\":" << infer_ms << ",";
+    j << "\"total_ms\":" << total_ms << ",";
     j << "\"persons\":[";
-    for (size_t i = 0; i < r.persons.size(); ++i) {
-        const auto& p = r.persons[i];
-        j << "{\"bbox\":[" << p.bbox.x << "," << p.bbox.y << "," << p.bbox.width
-          << "," << p.bbox.height << "],\"conf\":" << std::fixed << std::setprecision(3) << p.conf << "}";
-        if (i + 1 < r.persons.size()) j << ",";
+    for (size_t i = 0; i < persons.size(); ++i) {
+        const auto& p = persons[i];
+        j << "{\"bbox\":[" << p.bbox.x << "," << p.bbox.y << "," << p.bbox.width << "," << p.bbox.height
+          << "],\"conf\":" << std::fixed << std::setprecision(3) << p.conf << "}";
+        if (i + 1 < persons.size()) j << ",";
     }
     j << "]}";
     return j.str();
 }
 
-void logger_thread_func() {
-    fs::create_directories("detections");
-    while (!stop_all) {
-        FrameResult item;
-        bool has = false;
-        {
-            std::lock_guard<std::mutex> lock(q_mutex);
-            if (!results_q.empty()) {
-                item = std::move(results_q.front());
-                results_q.pop_front();
-                has = true;
-            }
-        }
-        if (!has) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            continue;
-        }
-        if (item.human_count > 0) {
-            std::string ts = ts_to_str(item.ts_ms);
-            std::string json_fname = "detections/" + item.cam_name + "_" + ts + ".json";
-            std::ofstream jf(json_fname);
-            if (jf.is_open()) {
-                jf << make_json(item);
-                jf.close();
-            }
-        }
-    }
-}
+std::atomic<bool> stop_all(false);
 
-void camera_thread_func(const std::string cam_dev, const std::string cam_name,
+void camera_thread_func(const std::string& cam_dev, const std::string& cam_name,
                         int target_size = 416, float conf_thresh = 0.35f) {
     try {
+        fs::create_directories("detections");
+        std::string log_path = "detections/" + cam_name + ".json";
+
+        // Open continuous log (append mode)
+        std::ofstream jf(log_path, std::ios::app);
+        if (!jf.is_open()) {
+            std::cerr << "[ERR] Cannot open " << log_path << " for writing\n";
+            return;
+        }
+        jf << "[\n";
+        bool first_entry = true;
+
         YoloV8 yolo;
         yolo.load(target_size);
 
@@ -127,6 +96,7 @@ void camera_thread_func(const std::string cam_dev, const std::string cam_name,
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 continue;
             }
+
             auto t_cap = high_resolution_clock::now();
             double capture_ms = duration_cast<microseconds>(t_cap - t0).count() / 1000.0;
 
@@ -136,25 +106,24 @@ void camera_thread_func(const std::string cam_dev, const std::string cam_name,
             auto t_infer1 = high_resolution_clock::now();
             double infer_ms = duration_cast<microseconds>(t_infer1 - t_infer0).count() / 1000.0;
 
-            FrameResult res;
-            res.cam_name = cam_name;
-            res.ts_ms = now_ms();
-            res.capture_ms = capture_ms;
-            res.infer_ms = infer_ms;
-            res.total_ms = duration_cast<microseconds>(high_resolution_clock::now() - t0).count() / 1000.0;
-
+            int human_count = 0;
+            std::vector<PersonInfo> persons;
             for (auto& o : objs) {
                 if (o.label == 0) {
                     PersonInfo p{ o.rect, o.prob };
-                    res.persons.push_back(p);
+                    persons.push_back(p);
                 }
             }
-            res.human_count = (int)res.persons.size();
+            human_count = (int)persons.size();
 
-            if (res.human_count > 0) {
-                std::lock_guard<std::mutex> lock(q_mutex);
-                results_q.push_back(std::move(res));
-                if (results_q.size() > 200) results_q.pop_front();
+            if (human_count > 0) {
+                long long ts_ms = now_ms();
+                double total_ms = duration_cast<microseconds>(high_resolution_clock::now() - t0).count() / 1000.0;
+                std::string js = make_json(cam_name, human_count, persons, capture_ms, infer_ms, total_ms, ts_ms);
+                if (!first_entry) jf << ",\n";
+                first_entry = false;
+                jf << js;
+                jf.flush();
             }
 
             frame_count++;
@@ -162,12 +131,16 @@ void camera_thread_func(const std::string cam_dev, const std::string cam_name,
             if (duration_cast<seconds>(now - t_last).count() >= 1) {
                 double fps = frame_count / std::max(1.0, duration_cast<milliseconds>(now - t_last).count() / 1000.0);
                 std::cout << "[CAM " << cam_name << "] FPS:" << std::fixed << std::setprecision(1) << fps
-                          << " infer:" << infer_ms << "ms" << std::endl;
+                          << " infer:" << infer_ms << "ms\n";
                 frame_count = 0;
                 t_last = now;
             }
+
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+
+        jf << "\n]\n";
+        jf.close();
     } catch (const std::exception& e) {
         std::cerr << "[EXC] " << cam_name << ": " << e.what() << std::endl;
     }
@@ -180,14 +153,15 @@ int main(int argc, char** argv) {
     std::string name1 = (argc > 4) ? argv[4] : "cam1";
 
     stop_all = false;
-    std::thread logger(logger_thread_func);
+
     std::thread t0(camera_thread_func, cam0, name0, 416, 0.35f);
     std::thread t1(camera_thread_func, cam1, name1, 416, 0.35f);
 
     std::cout << "Press Ctrl-C to stop\n";
+
     t0.join();
     t1.join();
+
     stop_all = true;
-    logger.join();
     return 0;
 }
