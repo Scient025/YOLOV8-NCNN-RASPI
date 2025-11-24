@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-trap 'echo ""; echo "[CTRL+C] Stopping all background tasks..."; kill 0' INT
 
 
 # ============================
