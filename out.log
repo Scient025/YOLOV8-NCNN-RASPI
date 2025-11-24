@@ -1,13 +1,13 @@
 -> Setting up virtual video devices (/dev/video10, /dev/video11, etc.)...
 Starting RPi Camera Stream & YOLO Processing Script...
-All processes will run in the background. Press Ctrl+C to stop.
--> Starting GStreamer Pipeline 1 (video0 -> 10/11)...
-   PID: 1835
--> Starting GStreamer Pipeline 2 (video2 -> 12/13)...
-   PID: 1836
--> Starting YOLO Detection (./YoloV8TR execute)...
-   PID: 1837
--> Starting Python Streaming Server (./rstp_server.py)...
-   PID: 1838
+-> Starting GStreamer Pipeline 1 (video0 -> 10/11)
+   PID: 2582
+-> Starting GStreamer Pipeline 2 (video2 -> 12/13)
+   PID: 2583
+-> Starting YOLO Detection (LIVE LOGGING ENABLED)
+   PID: 2584
+-> Starting Python Streaming Server (LIVE LOGGING ENABLED)
+   PID: 2585
 ----------------------------------------------------
-All 4 processes running. Check log files in ./logs for output.
+All processes started. PIDs saved to ./logs/pids.txt.
+Use './stop.sh' locally or 'stop_remote.sh' on the PC to shut down.
