@@ -1,5 +1,5 @@
 // yolov8dualv2.cpp
-// Dual-camera YOLOv8 headless version (fixed names cam1, cam2)
+// Dual-camera YOLOv8 headless version 
 
 #include "yoloV8.h"
 #include <opencv2/opencv.hpp>
@@ -148,20 +148,20 @@ void camera_thread_func(const std::string cam_dev, const std::string cam_name,
 
 int main()
 {
-    std::string cam0 = "/dev/video0";
-    std::string name0 = "cam1";
-    std::string cam1 = "/dev/video2";
-    std::string name1 = "cam2";
+    std::string cam5 = "/dev/video10";
+    std::string name5 = "cam3";
+    std::string cam6 = "/dev/video12";
+    std::string name6 = "cam4";
 
     stop_all = false;
 
-    std::thread t0(camera_thread_func, cam0, name0, 416, 0.35f);
-    std::thread t1(camera_thread_func, cam1, name1, 416, 0.35f);
+    std::thread t3(camera_thread_func, cam5, name5, 416, 0.35f);
+    std::thread t4(camera_thread_func, cam6, name6, 416, 0.35f);
 
     std::cout << "Press Ctrl-C to stop\n";
 
-    t0.join();
-    t1.join();
+    t3.join();
+    t4.join();
 
     stop_all = true;
     return 0;
