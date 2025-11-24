@@ -1,5 +1,5 @@
 // Dual-camera YOLOv8 with ZeroMQ binary publisher (Frame Packet mode)
-// Based on the original uploaded file. :contentReference[oaicite:1]{index=1}
+// Modified to send only (center_x, center_y) per detection.
 
 #include "yoloV8.h"
 #include <opencv2/opencv.hpp>
@@ -10,6 +10,7 @@
 #include <iostream>
 #include <vector>
 #include <zmq.hpp>
+#include <cstring> // Required for memcpy
 
 using namespace std;
 using namespace std::chrono;
@@ -24,10 +25,10 @@ std::atomic<bool> stop_all(false);
 
 // ---------------------- Binary Structs --------------------
 #pragma pack(push, 1)
+
+// Person struct: 2 floats (8 bytes: center_x, center_y)
 struct Person {
-    float x, y, w, h;   // bbox
-    float cx, cy;       // center
-    float conf;         // confidence
+    float cx, cy;       // center coordinates
 };
 
 struct FramePacketHeader {
@@ -40,9 +41,9 @@ struct FramePacketHeader {
 
 // Assign ports for cameras
 int port_for_camera(const string& cam_name) {
-    if (cam_name == "cam3") return 5556;
-    if (cam_name == "cam4") return 5557;
-    return 5566; // fallback
+    if (cam_name == "cam1") return 5554;
+    if (cam_name == "cam2") return 5555;
+    return 5564; // fallback
 }
 
 // ---------------------- Camera Thread ----------------------
@@ -67,6 +68,7 @@ void camera_thread_func(const string cam_dev, const string cam_name,
 
         // Load YOLO model
         YoloV8 yolo;
+        // Assuming yolo.load(target_size) implementation is available
         yolo.load(target_size);
 
         // Open video
@@ -105,13 +107,10 @@ void camera_thread_func(const string cam_dev, const string cam_name,
             for (auto &o : objs) {
                 if (o.label == 0) {  // only person class
                     Person p;
-                    p.x = o.rect.x;
-                    p.y = o.rect.y;
-                    p.w = o.rect.width;
-                    p.h = o.rect.height;
-                    p.cx = p.x + p.w * 0.5f;
-                    p.cy = p.y + p.h * 0.5f;
-                    p.conf = o.prob;
+                    // Only calculate and save center points (cx, cy)
+                    p.cx = o.rect.x + o.rect.width * 0.5f;
+                    p.cy = o.rect.y + o.rect.height * 0.5f;
+                    // NOTE: Confidence (p.conf) field removed as requested
                     persons.push_back(p);
                 }
             }
@@ -160,13 +159,14 @@ void camera_thread_func(const string cam_dev, const string cam_name,
 int main() {
     stop_all = false;
 
-    thread t0(camera_thread_func, "/dev/video10", "cam3", 0);
-    thread t1(camera_thread_func, "/dev/video12", "cam4", 1);
+    // Threads updated to use /dev/video10 and /dev/video12 as defined in start.sh
+    thread t1(camera_thread_func, "/dev/video10", "cam1", 1, 416, 0.35f);
+    thread t2(camera_thread_func, "/dev/video12", "cam2", 2, 416, 0.35f);
 
     cout << "YOLO ZMQ Publisher running. Press Ctrl+C to stop." << endl;
 
-    t0.join();
     t1.join();
+    t2.join();
 
     stop_all = true;
     return 0;
