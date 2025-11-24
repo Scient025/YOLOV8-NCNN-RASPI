@@ -3,31 +3,33 @@
 #include <cstring>
 #include <vector>
 #include <sstream>
+#include <iomanip> // Necessary for std::fixed and std::setprecision
 
 // --- Data Structures ---
+// Ensure the struct is tightly packed for network transmission
 #pragma pack(push, 1)
 
 struct Person {
-    float cx, cy;      // 8 bytes: 2 floats
+    float cx, cy;      // 8 bytes: Center X, Center Y (Normalized coordinates)
 };
 
 struct FramePacketHeader {
-    uint8_t cam_id;    // 1 byte
-    uint8_t count;     // 1 byte
-    uint64_t ts_ms;    // 8 bytes
+    uint8_t cam_id;    // 1 byte: Identifier for the camera
+    uint8_t count;     // 1 byte: Number of detections (People) in the packet
+    uint64_t ts_ms;    // 8 bytes: Timestamp in milliseconds
 };                     // TOTAL = 10 bytes
 
 #pragma pack(pop)
 
 // --- Configuration (6 Total ZeroMQ Endpoints) ---
-// Each element is a pair of {IP_ADDRESS, PORT}
+// Define all six ZMQ endpoints based on your latest port configuration.
 const std::vector<std::pair<std::string, int>> ZMQ_ENDPOINTS = {
-    {"192.168.0.186", 5554},
-    {"192.168.0.186", 5555},
-    {"192.168.0.16", 5556},
-    {"192.168.0.16", 5557},
-    {"192.168.0.158", 5558},
-    {"192.168.0.158", 5559}
+    {"192.168.0.186", 5554}, // Pi 1, Cam 1 Detections
+    {"192.168.0.186", 5555}, // Pi 1, Cam 2 Detections
+    {"192.168.0.16", 5556},  // Pi 2, Cam 3 Detections
+    {"192.168.0.16", 5557},  // Pi 2, Cam 4 Detections
+    {"192.168.0.158", 5558}, // Pi 3, Cam 5 Detections
+    {"192.168.0.158", 5559}  // Pi 3, Cam 6 Detections
 };
 
 const size_t NUM_ENDPOINTS = ZMQ_ENDPOINTS.size();
@@ -36,9 +38,9 @@ const size_t NUM_ENDPOINTS = ZMQ_ENDPOINTS.size();
 int main() {
     zmq::context_t context(1);
     
-    // We will use a vector to hold the socket objects
+    // Vector to hold the six subscriber sockets
     std::vector<zmq::socket_t> subscribers;
-    // We will use an array of poll items for efficient multiplexing
+    // Array of poll items for efficient, non-blocking multiplexing
     zmq::pollitem_t items[NUM_ENDPOINTS];
     
     // 1. Setup Subscribers
@@ -59,11 +61,11 @@ int main() {
         // Configure the poll item
         items[i].socket = (void*)subscriber; // Cast to void* for the pollitem
         items[i].fd = 0;
-        items[i].events = ZMQ_POLLIN;
+        items[i].events = ZMQ_POLLIN; // Listen for incoming data
         items[i].revents = 0;
     }
     
-    std::cout << "\n--- Subscriber Output (Combined from 6 Streams) ---\n";
+    std::cout << "\n--- Live Aggregated Subscriber Output (Ctrl+C to stop) ---\n";
 
     const size_t HEADER_SIZE = sizeof(FramePacketHeader);
     const size_t PERSON_SIZE = sizeof(Person);
@@ -71,20 +73,21 @@ int main() {
     try {
         while (true) {
             // Poll all sockets with a timeout of 100 milliseconds
-            // rc is the number of sockets that have data
+            // This prevents blocking indefinitely on a single socket.
             int rc = zmq::poll(items, NUM_ENDPOINTS, 100); 
 
-            if (rc > 0) { 
+            if (rc > 0) { // If there is incoming data on one or more sockets
                 // Check each socket to see which one has data
                 for (size_t i = 0; i < NUM_ENDPOINTS; ++i) {
                     if (items[i].revents & ZMQ_POLLIN) {
                         zmq::message_t message;
                         
-                        // Receive message without blocking (since poll confirmed data is there)
+                        // Receive message without blocking
                         if (!subscribers[i].recv(message, zmq::recv_flags::dontwait)) {
                             continue; 
                         }
                         
+                        // Correctly cast the message data to a pointer
                         const uint8_t* data = static_cast<const uint8_t*>(message.data());
                         size_t msg_size = message.size();
 
@@ -97,6 +100,7 @@ int main() {
                         FramePacketHeader header;
                         memcpy(&header, data, HEADER_SIZE);
 
+                        // Validate packet size
                         size_t expected_size = HEADER_SIZE + header.count * PERSON_SIZE;
                         if (msg_size != expected_size) {
                             std::cerr << "WARN: Size mismatch on Cam " << (int)header.cam_id 
@@ -105,17 +109,20 @@ int main() {
                             continue;
                         }
 
-                        // Process Detections
+                        // --- Print Aggregated Detections ---
+                        // Use std::cout for the aggregated output, matching the single-camera style
                         std::cout << "CAM " << (int)header.cam_id 
-                                  << ": " << (int)header.count 
-                                  << " Detections at T=" << header.ts_ms << "ms: ";
+                                  << " (Port " << ZMQ_ENDPOINTS[i].second 
+                                  << ", T=" << header.ts_ms << "ms): " 
+                                  << (int)header.count << " Detections: ";
 
                         if (header.count > 0) {
+                            // Correctly cast the remaining data to a Person pointer array
                             const Person* persons = reinterpret_cast<const Person*>(data + HEADER_SIZE);
                             for (uint8_t j = 0; j < header.count; j++) {
-                                // Print coordinates with reduced precision for clarity
-                                std::cout << "(" << std::fixed << std::setprecision(3) << persons[j].cx 
-                                          << ", " << persons[j].cy << ")";
+                                // Print coordinates with 3 decimal places for clarity
+                                std::cout << "Center=(" << std::fixed << std::setprecision(3) 
+                                          << persons[j].cx << ", " << persons[j].cy << ")";
                                 if (j < header.count - 1) {
                                     std::cout << ", ";
                                 }
@@ -133,7 +140,7 @@ int main() {
             std::cerr << "ZeroMQ Error: " << e.what() << std::endl;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Standard Error: " << e.what() << std::endl;
     }
 
     std::cout << "\nZeroMQ Subscriber terminated.\n";
